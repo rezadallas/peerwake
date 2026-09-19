@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#1d3a4f">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="PeerWake">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>PeerWake probe</title>
+<style>
+:root{
+  --bg:#e9eef0; --panel:#f7f9f9; --ink:#15232e; --muted:#5b6b75; --line:#c9d3d7;
+  --deep:#1d3a4f; --on-deep:#f2f5f3;
+  --ok:#1f7a5c; --warn:#a86a00; --bad:#b3372b; --idle:#6c7a83;
+  --r-big:14px; --r-small:8px;
+  --ui:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#0e1a22;--panel:#152631;--ink:#e3eaed;--muted:#8fa2ad;--line:#2a4050;
+        --deep:#224a63;--ok:#4cc39a;--warn:#e0a53a;--bad:#ef6b5c;--idle:#7e919c}
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 var(--ui);
+  padding:env(safe-area-inset-top) 0 calc(env(safe-area-inset-bottom) + 24px)}
+main{max-width:640px;margin:0 auto;padding:0 14px}
+
+/* The one loud element: the link panel */
+.link{background:var(--deep);color:var(--on-deep);border-radius:0 0 var(--r-big) var(--r-big);
+  margin:0 -14px 18px;padding:18px 18px 16px}
+.link h1{font-size:15px;font-weight:600;margin:0 0 12px;opacity:.85;display:flex;justify-content:space-between;gap:8px}
+.link h1 span{font-family:var(--mono);font-weight:400;opacity:.8}
+.state{display:flex;align-items:center;gap:12px;font-size:30px;font-weight:700;letter-spacing:-.01em}
+.lamp{width:18px;height:18px;border-radius:50%;background:var(--idle);box-shadow:0 0 0 4px rgba(255,255,255,.12);flex:none}
+.lamp[data-s="connected"]{background:#5fe0b0}
+.lamp[data-s="connecting"],.lamp[data-s="new"],.lamp[data-s="checking"]{background:#f3c35a}
+.lamp[data-s="disconnected"]{background:#f39a4a}
+.lamp[data-s="failed"],.lamp[data-s="closed"]{background:#ff7a6b}
+.counts{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}
+.counts div{background:rgba(255,255,255,.08);border-radius:var(--r-small);padding:8px 10px}
+.counts b{display:block;font-size:26px;font-variant-numeric:tabular-nums}
+.counts small{opacity:.75;font-size:13px}
+.facts{margin:12px 0 0;display:grid;grid-template-columns:auto 1fr;gap:2px 12px;font-size:13px}
+.facts dt{opacity:.7}.facts dd{margin:0;font-family:var(--mono);overflow-wrap:anywhere}
+
+section{margin:0 0 20px}
+h2{font-size:17px;margin:0 0 8px}
+p.hint{margin:0 0 10px;color:var(--muted);font-size:14px}
+.role{background:var(--panel);border:1px solid var(--line);border-radius:var(--r-small);padding:12px;margin-bottom:10px}
+.role h3{margin:0 0 8px;font-size:15px}
+label{display:block;font-size:14px;color:var(--muted);margin:10px 0 4px}
+input,textarea{width:100%;font:14px var(--mono);color:var(--ink);background:var(--bg);
+  border:1px solid var(--line);border-radius:var(--r-small);padding:10px}
+textarea{height:74px;resize:vertical;word-break:break-all}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+button{font:600 15px var(--ui);min-height:44px;padding:0 16px;border-radius:var(--r-small);
+  border:1px solid var(--deep);background:var(--deep);color:var(--on-deep);cursor:pointer}
+button.quiet{background:transparent;color:var(--ink);border-color:var(--line)}
+button.danger{background:transparent;color:var(--bad);border-color:var(--line)}
+button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid var(--warn);outline-offset:2px}
+button:active{transform:translateY(1px)}
+.err{color:var(--bad);font-size:14px;min-height:1.2em;margin:6px 0 0}
+pre#log{font:12px/1.5 var(--mono);background:var(--panel);border:1px solid var(--line);border-radius:var(--r-small);
+  padding:10px;margin:8px 0 0;max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word}
+</style>
+</head>
+<body>
+<main>
+  <div class="link" aria-live="polite">
+    <h1>PeerWake probe <span id="runId"></span></h1>
+    <div class="state"><i class="lamp" id="lamp"></i><span id="sConn">no connection</span></div>
+    <div class="counts">
+      <div><small>Last ping sent</small><b id="sSent">–</b></div>
+      <div><small>Last ping received</small><b id="sRecv">–</b></div>
+    </div>
+    <dl class="facts">
+      <dt>ICE</dt><dd id="sIce">–</dd>
+      <dt>Channel</dt><dd id="sDc">–</dd>
+      <dt>Path</dt><dd id="sPath">–</dd>
+      <dt>Heard from peer</dt><dd id="sAge">never</dd>
+    </dl>
+  </div>
+
+  <section>
+    <h2>Setup</h2>
+    <label for="dev">This phone's label (goes into the log file name)</label>
+    <input id="dev" placeholder="A or B" autocomplete="off">
+    <label for="stun">STUN address (leave empty for host-only; TURN is refused)</label>
+    <input id="stun" autocomplete="off" spellcheck="false">
+  </section>
+
+  <section>
+    <h2>Connect</h2>
+    <p class="hint">Do the whole exchange within about 30 seconds, or the NAT openings can expire.</p>
+    <div class="role">
+      <h3>Phone A starts</h3>
+      <button id="bOffer">Create offer</button>
+      <label for="inAnswer">Paste answer from phone B</label>
+      <textarea id="inAnswer" spellcheck="false" placeholder="PW1.…"></textarea>
+      <div class="row"><button class="quiet" data-paste="inAnswer">Paste</button><button id="bAnswerApply">Apply answer</button></div>
+    </div>
+    <div class="role">
+      <h3>Phone B responds</h3>
+      <label for="inOffer">Paste offer from phone A</label>
+      <textarea id="inOffer" spellcheck="false" placeholder="PW1.…"></textarea>
+      <div class="row"><button class="quiet" data-paste="inOffer">Paste</button><button id="bAnswer">Create answer</button></div>
+    </div>
+    <label for="out">Send this to the other phone</label>
+    <textarea id="out" readonly placeholder="Your offer or answer appears here"></textarea>
+    <div class="row"><button id="bCopy">Copy</button><button class="quiet" id="bShare">Share</button></div>
+    <p class="err" id="err" role="alert"></p>
+  </section>
+
+  <section>
+    <h2>Test</h2>
+    <label for="msg">Manual test message</label>
+    <input id="msg" value="hello" autocomplete="off">
+    <div class="row"><button id="bSend">Send message</button><button class="danger" id="bReset">Close connection</button></div>
+  </section>
+
+  <section>
+    <h2>Log</h2>
+    <p class="hint">Saved on this phone after every line. Newest first; the export has everything.</p>
+    <div class="row"><button id="bExport">Export logs</button><button class="danger" id="bClear">Clear logs</button></div>
+    <pre id="log"></pre>
+  </section>
+</main>
+
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const LOG_KEY = 'peerwake.log.v1', STUN_KEY = 'peerwake.stun', DEV_KEY = 'peerwake.dev';
+const MAX_ENTRIES = 15000, SHOWN = 400;
+const PING_MS = 20000, GATHER_TIMEOUT_MS = 10000;
+const DEFAULT_STUN = 'stun:stun.l.google.com:19302';
+const run = Math.random().toString(36).slice(2, 7);   // one id per app launch
+
+let pc = null, dc = null, timer = null, conn = 0;
+let seq = 0, lastSent = null, lastRecv = null, lastRecvAt = null, lastTickAt = null, path = '-';
+
+/* ---------- persistent log ---------- */
+let log = [];
+try { log = JSON.parse(localStorage.getItem(LOG_KEY) || '[]'); } catch { log = []; }
+let lines = log.slice(-SHOWN).reverse().map(fmt);
+
+function persist() {
+  try { localStorage.setItem(LOG_KEY, JSON.stringify(log)); }
+  catch { log.splice(0, Math.ceil(log.length / 4)); try { localStorage.setItem(LOG_KEY, JSON.stringify(log)); } catch {} }
+}
+function L(kind, detail) {
+  const e = {
+    ts: new Date().toISOString(), dev: $('dev').value.trim() || '?', run, conn, kind,
+    cs: pc ? pc.connectionState : '-', ics: pc ? pc.iceConnectionState : '-',
+    dc: dc ? dc.readyState : '-', sent: lastSent, recv: lastRecv,
+    vis: document.visibilityState, path
+  };
+  if (detail !== undefined) e.detail = detail;
+  log.push(e);
+  if (log.length > MAX_ENTRIES) log.splice(0, log.length - MAX_ENTRIES);
+  persist();
+  lines.unshift(fmt(e)); if (lines.length > SHOWN) lines.length = SHOWN;
+  $('log').textContent = lines.join('\n');
+  status();
+}
+function fmt(e) {
+  const d = new Date(e.ts), p = n => String(n).padStart(2, '0');
+  const t = `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  const det = e.detail === undefined ? '' : ' ' + (typeof e.detail === 'string' ? e.detail : JSON.stringify(e.detail));
+  return `${t} ${e.kind} [${e.cs}/${e.ics}] s=${e.sent ?? '-'} r=${e.recv ?? '-'}${det}`;
+}
+function status() {
+  const cs = pc ? pc.connectionState : 'none';
+  $('lamp').dataset.s = cs;
+  $('sConn').textContent = pc ? cs : 'no connection';
+  $('sIce').textContent = pc ? pc.iceConnectionState : '–';
+  $('sDc').textContent = dc ? dc.readyState : '–';
+  $('sPath').textContent = path;
+  $('sSent').textContent = lastSent ?? '–';
+  $('sRecv').textContent = lastRecv ?? '–';
+  $('sAge').textContent = lastRecvAt ? Math.round((Date.now() - lastRecvAt) / 1000) + ' s ago' : 'never';
+}
+setInterval(status, 1000);
+
+/* ---------- WebRTC ---------- */
+function iceServers() {
+  const u = $('stun').value.trim();
+  localStorage.setItem(STUN_KEY, u);
+  if (!u) return [];
+  if (!/^stuns?:/i.test(u)) throw new Error('Only stun: or stuns: addresses are allowed. TURN is disabled in this experiment.');
+  return [{ urls: u }];
+}
+function parseCand(line) {
+  const f = line.replace(/^a=/, '').split(' ');
+  return { type: f[7], proto: f[2], addr: f[4] };
+}
+function teardown(reason) {
+  if (timer) { clearInterval(timer); timer = null; }
+  const had = pc || dc;
+  if (dc) { dc.onopen = dc.onclose = dc.onerror = dc.onmessage = null; try { dc.close(); } catch {} }
+  if (pc) { try { pc.close(); } catch {} }
+  if (had) L('closed', reason);
+  pc = dc = null;
+  seq = 0; lastSent = lastRecv = lastRecvAt = lastTickAt = null; path = '-';
+  status();
+}
+function newPC() {
+  const servers = iceServers();
+  teardown('replaced by new connection');
+  conn++;
+  const p = pc = new RTCPeerConnection({ iceServers: servers, iceTransportPolicy: 'all' });
+  p.onicecandidate = e => { if (p === pc && e.candidate && e.candidate.candidate) L('cand-local', parseCand(e.candidate.candidate)); };
+  p.onicegatheringstatechange = () => { if (p === pc) L('gathering', p.iceGatheringState); };
+  p.oniceconnectionstatechange = () => { if (p === pc) L('ice-state'); };
+  p.onconnectionstatechange = () => { if (p !== pc) return; L('conn-state'); if (p.connectionState === 'connected') refreshPath(true); };
+  p.ondatachannel = e => bindDC(e.channel);
+  L('pc-created', { stun: servers.length ? servers[0].urls : 'none' });
+}
+function gathered(p) {
+  return new Promise(res => {
+    if (p.iceGatheringState === 'complete') return res();
+    const t = setTimeout(() => { L('gathering-timeout'); res(); }, GATHER_TIMEOUT_MS);
+    p.addEventListener('icegatheringstatechange', () => {
+      if (p.iceGatheringState === 'complete') { clearTimeout(t); res(); }
+    });
+  });
+}
+function stripRelay(sdp) {
+  return sdp.split(/\r?\n/).filter(l => l && !(l.startsWith('a=candidate:') && / typ relay( |$)/.test(l))).join('\r\n') + '\r\n';
+}
+function encode(desc) { return 'PW1.' + btoa(JSON.stringify({ type: desc.type, sdp: stripRelay(desc.sdp) })); }
+function decode(text, want) {
+  const t = text.replace(/\s+/g, '');
+  if (!t.startsWith('PW1.')) throw new Error('That is not a PeerWake blob. It should start with PW1.');
+  let o;
+  try { o = JSON.parse(atob(t.slice(4))); } catch { throw new Error('The blob is damaged. Copy it again in full.'); }
+  if (o.type !== want) throw new Error(`Expected an ${want}, but this is an ${o.type}.`);
+  const cands = o.sdp.split(/\r?\n/).filter(l => l.startsWith('a=candidate:')).map(parseCand);
+  L('cand-remote', cands);
+  return { type: o.type, sdp: stripRelay(o.sdp) };
+}
+function bindDC(ch) {
+  dc = ch;
+  ch.onopen = () => { if (ch === dc) { L('channel-open'); startPings(); } };
+  ch.onclose = () => { if (ch === dc) L('channel-closed'); };
+  ch.onerror = e => { if (ch === dc) L('channel-error', (e.error && e.error.message) || 'error'); };
+  ch.onmessage = e => {
+    if (ch !== dc) return;
+    let m; try { m = JSON.parse(e.data); } catch { m = { t: 'raw' }; }
+    const now = Date.now();
+    if (m.t === 'ping') {
+      const gapS = lastRecvAt ? Math.round((now - lastRecvAt) / 1000) : null;
+      lastRecv = m.n; lastRecvAt = now;
+      L('ping-recv', { n: m.n, gapS, latencyPlusSkewMs: now - m.ts });
+    } else if (m.t === 'msg') {
+      L('msg-recv', String(m.text).slice(0, 500));
+    } else L('recv-unknown');
+  };
+}
+function startPings() {
+  if (timer) return;
+  lastTickAt = null;
+  ping();
+  timer = setInterval(ping, PING_MS);
+}
+async function ping() {
+  const now = Date.now();
+  const lateMs = lastTickAt == null ? 0 : now - lastTickAt - PING_MS;   // large = JS was suspended
+  lastTickAt = now;
+  let sent = false;
+  if (dc && dc.readyState === 'open') {
+    try { seq++; dc.send(JSON.stringify({ t: 'ping', n: seq, ts: now })); lastSent = seq; sent = true; }
+    catch (err) { L('send-error', String(err)); }
+  }
+  const rttMs = await refreshPath(false);
+  L('tick', { sent, lateMs, sinceRecvS: lastRecvAt ? Math.round((now - lastRecvAt) / 1000) : null, rttMs });
+}
+async function refreshPath(force) {
+  if (!pc) return null;
+  try {
+    const st = await pc.getStats();
+    let pair = null;
+    st.forEach(r => { if (r.type === 'transport' && r.selectedCandidatePairId) pair = st.get(r.selectedCandidatePairId); });
+    if (!pair) st.forEach(r => { if (!pair && r.type === 'candidate-pair' && r.state === 'succeeded' && (r.nominated || r.selected)) pair = r; });
+    if (!pair) return null;
+    const lc = st.get(pair.localCandidateId) || {}, rc = st.get(pair.remoteCandidateId) || {};
+    const rtt = pair.currentRoundTripTime != null ? Math.round(pair.currentRoundTripTime * 1000) : null;
+    const np = `${lc.candidateType || '?'}/${lc.protocol || '?'} to ${rc.candidateType || '?'}`;
+    if (force || np !== path) {
+      path = np;
+      L('path', { local: lc.candidateType, localAddr: lc.address || lc.ip, remote: rc.candidateType, remoteAddr: rc.address || rc.ip, rttMs: rtt });
+      if (lc.candidateType === 'relay' || rc.candidateType === 'relay') L('WARNING', 'relay candidate selected; this run is invalid');
+    }
+    return rtt;
+  } catch { return null; }
+}
+
+/* ---------- actions ---------- */
+async function createOffer() {
+  newPC();
+  bindDC(pc.createDataChannel('peerwake', { ordered: true }));
+  await pc.setLocalDescription(await pc.createOffer());
+  await gathered(pc);
+  showOut(encode(pc.localDescription), 'offer');
+}
+async function applyAnswer() {
+  if (!pc || pc.signalingState !== 'have-local-offer') throw new Error('Create an offer on this phone first, then apply the answer.');
+  await pc.setRemoteDescription(decode($('inAnswer').value, 'answer'));
+  L('answer-applied');
+}
+async function createAnswer() {
+  const offer = decode($('inOffer').value, 'offer');
+  newPC();
+  await pc.setRemoteDescription(offer);
+  await pc.setLocalDescription(await pc.createAnswer());
+  await gathered(pc);
+  showOut(encode(pc.localDescription), 'answer');
+}
+function showOut(blob, kind) {
+  $('out').value = blob;
+  L(kind + '-created', { chars: blob.length });
+  navigator.clipboard?.writeText(blob).then(() => L('copied'), () => {});
+}
+async function copyOut() {
+  const v = $('out').value; if (!v) throw new Error('Nothing to copy yet. Create an offer or answer first.');
+  try { await navigator.clipboard.writeText(v); } catch { $('out').select(); document.execCommand('copy'); }
+  L('copied');
+}
+async function shareOut() {
+  const v = $('out').value; if (!v) throw new Error('Nothing to share yet. Create an offer or answer first.');
+  if (!navigator.share) return copyOut();
+  try { await navigator.share({ text: v }); } catch (e) { if (e.name !== 'AbortError') throw e; }
+}
+function sendMsg() {
+  if (!dc || dc.readyState !== 'open') throw new Error('No open channel. Connect first.');
+  const text = $('msg').value;
+  dc.send(JSON.stringify({ t: 'msg', text }));
+  L('msg-sent', text);
+}
+async function exportLogs() {
+  const cols = ['ts', 'dev', 'run', 'conn', 'kind', 'cs', 'ics', 'dc', 'sent', 'recv', 'vis', 'path', 'detail'];
+  const esc = v => { if (v == null) return ''; const s = typeof v === 'object' ? JSON.stringify(v) : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  const csv = [cols.join(',')].concat(log.map(e => cols.map(c => esc(e[c])).join(','))).join('\n');
+  const name = `peerwake-${($('dev').value.trim() || 'phone').replace(/\W+/g, '')}-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '')}.csv`;
+  const file = new File([csv], name, { type: 'text/csv' });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: name }); L('exported', { rows: log.length, via: 'share' }); return; }
+    catch (e) { if (e.name === 'AbortError') return; }
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(file); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  L('exported', { rows: log.length, via: 'download' });
+}
+function clearLogs() {
+  if (!confirm('Delete all saved log lines on this phone?')) return;
+  log = []; lines = []; persist(); L('log-cleared');
+}
+function act(fn) {
+  return async () => {
+    $('err').textContent = '';
+    try { await fn(); } catch (e) { $('err').textContent = e.message || String(e); L('error', e.message || String(e)); }
+  };
+}
+$('bOffer').onclick = act(createOffer);
+$('bAnswerApply').onclick = act(applyAnswer);
+$('bAnswer').onclick = act(createAnswer);
+$('bCopy').onclick = act(copyOut);
+$('bShare').onclick = act(shareOut);
+$('bSend').onclick = act(sendMsg);
+$('bReset').onclick = act(() => teardown('closed by user'));
+$('bExport').onclick = act(exportLogs);
+$('bClear').onclick = act(clearLogs);
+document.querySelectorAll('[data-paste]').forEach(b => b.onclick = act(async () => {
+  $(b.dataset.paste).value = await navigator.clipboard.readText();
+}));
+
+/* ---------- lifecycle evidence ---------- */
+document.addEventListener('visibilitychange', () => L('visibility', document.visibilityState));
+document.addEventListener('freeze', () => L('freeze'));
+document.addEventListener('resume', () => L('resume'));
+addEventListener('pagehide', e => L('pagehide', { persisted: e.persisted }));
+addEventListener('pageshow', e => { if (e.persisted) L('pageshow', { persisted: true }); });
+addEventListener('online', () => L('online'));
+addEventListener('offline', () => L('offline'));
+navigator.connection?.addEventListener?.('change', () =>
+  L('network-change', { type: navigator.connection.type, effective: navigator.connection.effectiveType }));
+
+/* ---------- boot ---------- */
+$('stun').value = localStorage.getItem(STUN_KEY) ?? DEFAULT_STUN;
+$('dev').value = localStorage.getItem(DEV_KEY) || '';
+$('dev').onchange = () => localStorage.setItem(DEV_KEY, $('dev').value.trim());
+$('runId').textContent = 'run ' + run;
+$('log').textContent = lines.join('\n');
+navigator.storage?.persist?.();
+L('app-start', {
+  standalone: matchMedia('(display-mode: standalone)').matches || navigator.standalone === true,
+  ua: navigator.userAgent, savedRows: log.length
+});
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(e => L('sw-error', String(e)));
+</script>
+</body>
+</html>
